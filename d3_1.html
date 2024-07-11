@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brain Region Density Comparison Viewer (D3)</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+        }
+        #drop_zone {
+            border: 2px dashed #ccc;
+            border-radius: 20px;
+            width: 480px;
+            margin: 20px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        #filters {
+            display: flex;
+            justify-content: space-around;
+            margin-bottom: 20px;
+        }
+        .filter-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+        }
+        .filter-button {
+            padding: 3px 6px;
+            cursor: pointer;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            font-size: 0.8em;
+            background-color: #f8f8f8;
+            color: #333;
+            transition: all 0.3s ease;
+        }
+        .filter-button.active {
+            background-color: #4CAF50;
+            color: white;
+            border-color: #45a049;
+        }
+        #legend {
+            display: flex;
+            justify-content: space-between;
+            margin: 20px 0;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 5px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+        }
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            margin-right: 5px;
+        }
+        #table-container {
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            position: sticky;
+            top: 0;
+            background-color: #f2f2f2;
+            cursor: pointer;
+        }
+        th:hover {
+            background-color: #ddd;
+        }
+    </style>
+</head>
+<body>
+    <div id="drop_zone">
+        <p>Drag and drop CSV files here (with average_density data)</p>
+    </div>
+    <div id="filters">
+        <div>
+            <h3>Depth Filters:</h3>
+            <div id="depth_filters" class="filter-group"></div>
+        </div>
+        <div>
+            <h3>St Level Filters:</h3>
+            <div id="st_level_filters" class="filter-group"></div>
+        </div>
+    </div>
+    <div id="legend"></div>
+    <div id="table-container"></div>
+
+    <script>
+        let globalData = [];
+        let columns = ['acronym', 'depth', 'st_level'];
+        let depthFilters = new Set();
+        let stLevelFilters = new Set();
+        let queryData = {};
+        let rootDensities = {};
+        let sortColumn = 'graph_order';
+        let sortOrder = 1;
+
+        // Load query data
+        d3.csv('query.csv').then(data => {
+            processQueryData(data);
+        }).catch(error => console.error('Error loading query.csv:', error));
+
+        function processQueryData(data) {
+            data.forEach(row => {
+                queryData[row.acronym] = {
+                    depth: row.depth,
+                    st_level: row.st_level,
+                    color_hex_triplet: row.color_hex_triplet,
+                    graph_order: +row.graph_order
+                };
+                depthFilters.add(row.depth);
+                stLevelFilters.add(row.st_level);
+            });
+            updateFilters();
+            updateLegend();
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            let files = e.dataTransfer.files;
+            Promise.all(Array.from(files).map(file => 
+                new Promise((resolve) => {
+                    Papa.parse(file, {
+                        complete: function(results) {
+                            processData(results.data, file.name);
+                            resolve();
+                        },
+                        header: true
+                    });
+                })
+            )).then(() => {
+                columns = ['acronym', 'depth', 'st_level', ...Object.keys(rootDensities)];
+                updateTable();
+            });
+        }
+
+        function processData(data, fileName) {
+            let formattedName = formatFileName(fileName);
+            if (!columns.includes(formattedName)) columns.push(formattedName);
+
+            let rootDensity = data.find(row => row.acronym === 'root')?.average_density;
+            if (rootDensity) {
+                rootDensities[formattedName] = parseFloat(rootDensity);
+            }
+
+            data.forEach(row => {
+                if (row.acronym && row.average_density && queryData[row.acronym]) {
+                    let existingRow = globalData.find(item => item.acronym === row.acronym);
+                    let relativeDensity = parseFloat(row.average_density) / rootDensities[formattedName];
+                    if (existingRow) {
+                        existingRow[formattedName] = relativeDensity;
+                    } else {
+                        let newRow = {
+                            acronym: row.acronym,
+                            depth: queryData[row.acronym].depth,
+                            st_level: queryData[row.acronym].st_level,
+                            color: queryData[row.acronym].color_hex_triplet,
+                            graph_order: queryData[row.acronym].graph_order,
+                            [formattedName]: relativeDensity
+                        };
+                        globalData.push(newRow);
+                    }
+                }
+            });
+        }
+
+        function formatFileName(fileName) {
+            const parts = fileName.split('_');
+            const sex = parts[0];
+            const number = parts[1];
+            let state;
+
+            if (fileName.includes('Fed')) state = 'FED';
+            else if (fileName.includes('Fasted')) state = 'FAST';
+            else if (fileName.includes('Restraint')) state = 'RST';
+            else if (fileName.includes('FastRefeed')) state = 'FRF';
+
+            return `${state} ${sex}_${number}`;
+        }
+
+        function updateFilters() {
+            updateFilterButtons('depth_filters', depthFilters);
+            updateFilterButtons('st_level_filters', stLevelFilters);
+        }
+
+        function updateFilterButtons(containerId, filterSet) {
+            const container = d3.select(`#${containerId}`);
+            container.selectAll('button').remove();
+            container.selectAll('button')
+                .data([...filterSet])
+                .enter()
+                .append('button')
+                .text(d => d)
+                .classed('filter-button', true)
+                .classed('active', true)
+                .on('click', function(event, d) {
+                    d3.select(this).classed('active', !d3.select(this).classed('active'));
+                    updateTable();
+                });
+        }
+
+        function updateTable() {
+            const activeDepthFilters = getActiveFilters('depth_filters');
+            const activeStLevelFilters = getActiveFilters('st_level_filters');
+
+            const filteredData = globalData.filter(row => 
+                (activeDepthFilters.size === 0 || activeDepthFilters.has(row.depth)) &&
+                (activeStLevelFilters.size === 0 || activeStLevelFilters.has(row.st_level))
+            );
+
+            // Sort data
+            filteredData.sort((a, b) => {
+                if (sortColumn === 'acronym') {
+                    return sortOrder * (a.graph_order - b.graph_order);
+                }
+                const aValue = a[sortColumn];
+                const bValue = b[sortColumn];
+                if (typeof aValue === 'string' && typeof bValue === 'string') {
+                    return sortOrder * aValue.localeCompare(bValue);
+                }
+                return sortOrder * ((bValue || 0) - (aValue || 0));
+            });
+
+            const table = d3.select('#table-container').selectAll('table').data([null]);
+            table.enter().append('table');
+
+            // Update header
+            const thead = table.selectAll('thead').data([null]);
+            thead.enter().append('thead');
+
+            const headerRow = thead.selectAll('tr').data([null]);
+            headerRow.enter().append('tr');
+
+            const headerCells = headerRow.selectAll('th')
+                .data(columns)
+                .join('th')
+                .text(d => d)
+                .on('click', (event, d) => {
+                    sortColumn = d;
+                    sortOrder *= -1;
+                    updateTable();
+                })
+                .style('background-color', d => {
+                    if (d !== 'depth' && d !== 'st_level' && d !== 'acronym') {
+                        const state = d.split(' ')[0];
+                        return getStateColor(state);
+                    }
+                    return null;
+                })
+                .style('color', d => {
+                    if (d !== 'depth' && d !== 'st_level' && d !== 'acronym') {
+                        return 'white';
+                    }
+                    return null;
+                });
+
+            // Update body
+            const tbody = table.selectAll('tbody').data([null]);
+            tbody.enter().append('tbody');
+
+            const rows = tbody.selectAll('tr')
+                .data(filteredData)
+                .join('tr');
+
+            rows.selectAll('td')
+                .data(row => columns.map(column => ({column, value: row[column], color: row.color})))
+                .join('td')
+                .text(d => {
+                    if (d.column === 'acronym' || d.column === 'depth' || d.column === 'st_level') {
+                        return d.value;
+                    } else if (d.value !== undefined) {
+                        return d.value.toFixed(2) + 'x';
+                    }
+                    return '';
+                })
+                .style('background-color', d => {
+                    if (d.column === 'acronym') {
+                        return `#${d.color}`;
+                    } else if (d.column !== 'depth' && d.column !== 'st_level' && d.value !== undefined) {
+                        return getColor(d.value);
+                    }
+                    return null;
+                })
+                .style('color', d => {
+                    if (d.column === 'acronym') {
+                        return 'black';
+                    } else if (d.column !== 'depth' && d.column !== 'st_level' && d.value !== undefined) {
+                        return getContrastColor(getColor(d.value));
+                    }
+                    return null;
+                });
+        }
+
+        function getActiveFilters(containerId) {
+            return new Set(
+                d3.select(`#${containerId}`)
+                    .selectAll('button.active')
+                    .data()
+            );
+        }
+
+        function getColor(value) {
+            if (value < 1) {
+                let intensity = Math.round(255 * value);
+                return `rgb(${intensity}, ${intensity}, 255)`;
+            } else {
+                let intensity = Math.round(255 * (1 - Math.min(value - 1, 9) / 9));
+                return `rgb(255, ${intensity}, ${intensity})`;
+            }
+        }
+
+        function getContrastColor(rgbColor) {
+            let [r, g, b] = rgbColor.match(/\d+/g).map(Number);
+            let yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
+            return (yiq >= 128) ? 'black' : 'white';
+        }
+
+        function getStateColor(state) {
+            switch (state) {
+                case 'FED': return '#4CAF50';  // Green
+                case 'FAST': return '#2196F3'; // Blue
+                case 'RST': return '#FFC107';  // Amber
+                case 'FRF': return '#9C27B0';  // Purple
+                default: return '#000000';     // Black
+            }
+        }
+
+        function updateLegend() {
+            const legend = d3.select('#legend');
+            legend.selectAll('*').remove();
+            
+            const steps = 11;
+            const legendData = d3.range(steps).map(i => {
+                const value = i === 0 ? 0 : Math.pow(10, i / 5 - 1);  // 0.1x to 10x range, logarithmic scale
+                return {value, color: getColor(value)};
+            });
+
+            const legendItems = legend.selectAll('.legend-item')
+                .data(legendData)
+                .enter()
+                .append('div')
+                .attr('class', 'legend-item');
+
+            legendItems.append('div')
+                .attr('class', 'legend-color')
+                .style('background-color', d => d.color);
+
+            legendItems.append('span')
+                .text(d => d.value.toFixed(2) + 'x');
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+        }
+
+        const dropZone = d3.select('#drop_zone');
+        dropZone.on('dragover', handleDragOver);
+        dropZone.on('drop', handleDrop);
+    </script>
+</body>
+</html>

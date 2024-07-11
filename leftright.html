@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Left-Right CSV Processor</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        #drop_zone { border: 2px dashed #ccc; border-radius: 20px; width: 480px; margin: 20px auto; padding: 20px; text-align: center; }
+        #result { margin-top: 20px; padding: 20px; border: 1px solid #ddd; overflow-x: auto; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div id="drop_zone">
+        <p>Drag and drop CSV file here</p>
+    </div>
+    <div id="result"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <script>
+        let globalData = [];
+        let columns = ['name', 'acronym', 'count_left', 'count_right', 'count_sum', 'volume_left', 'volume_right', 'volume_sum', 'density_left', 'density_right', 'average_density'];
+
+        function handleDrop(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('File dropped');
+
+            var file = e.dataTransfer.files[0];
+            if (!file) {
+                console.error('No file detected in drop event');
+                return;
+            }
+
+            console.log('Parsing file:', file.name);
+            Papa.parse(file, {
+                complete: function(results) {
+                    console.log('Parse complete', results);
+                    if (results.errors.length > 0) {
+                        console.error('Parse errors:', results.errors);
+                    }
+                    processData(results.data);
+                },
+                header: true,
+                error: function(error) {
+                    console.error('Parse error:', error);
+                }
+            });
+        }
+
+        function processData(data) {
+            console.log('Processing data', data.length, 'rows');
+            console.log('Sample row:', data[0]);
+
+            let leftData = data.filter(row => row.acronym && row.acronym.endsWith('-L') && row.name && row.name.toLowerCase().startsWith('left '));
+            let rightData = data.filter(row => row.acronym && row.acronym.endsWith('-R') && row.name && row.name.toLowerCase().startsWith('right '));
+
+            console.log('Left data:', leftData.length, 'rows');
+            console.log('Right data:', rightData.length, 'rows');
+
+            globalData = leftData.map(leftRow => {
+                let rightRow = rightData.find(r => r.acronym.slice(0, -2) === leftRow.acronym.slice(0, -2));
+                if (!rightRow) return null;
+
+                console.log('Processing row:', leftRow.name);
+                console.log('Left count:', leftRow['cell count'], 'Right count:', rightRow['cell count']);
+
+                return {
+                    name: leftRow.name.replace(/^left /i, ''),
+                    acronym: leftRow.acronym.slice(0, -2),
+                    count_left: parseFloat(leftRow['cell count']) || 0,
+                    count_right: parseFloat(rightRow['cell count']) || 0,
+                    count_sum: (parseFloat(leftRow['cell count']) || 0) + (parseFloat(rightRow['cell count']) || 0),
+                    volume_left: parseFloat(leftRow['area (mm^3)']) || 0,
+                    volume_right: parseFloat(rightRow['area (mm^3)']) || 0,
+                    volume_sum: (parseFloat(leftRow['area (mm^3)']) || 0) + (parseFloat(rightRow['area (mm^3)']) || 0),
+                    density_left: parseFloat(leftRow['density (cells/mm^3)']) || 0,
+                    density_right: parseFloat(rightRow['density (cells/mm^3)']) || 0,
+                    average_density: ((parseFloat(leftRow['density (cells/mm^3)']) || 0) + (parseFloat(rightRow['density (cells/mm^3)']) || 0)) / 2
+                };
+            }).filter(row => row !== null);
+
+            console.log('Processed data:', globalData.length, 'rows');
+            console.log('Sample processed row:', globalData[0]);
+            updateTable();
+        }
+
+        function updateTable() {
+            let table = '<table><thead><tr>';
+            columns.forEach(col => {
+                table += `<th onclick="sortTable('${col}')">${col}</th>`;
+            });
+            table += '</tr></thead><tbody>';
+
+            globalData.forEach(row => {
+                table += '<tr>';
+                columns.forEach(col => {
+                    let value = row[col];
+                    if (typeof value === 'number') {
+                        value = value.toFixed(2);
+                    }
+                    table += `<td>${value}</td>`;
+                });
+                table += '</tr>';
+            });
+
+            table += '</tbody></table>';
+            document.getElementById('result').innerHTML = table;
+        }
+
+        function sortTable(column) {
+            globalData.sort((a, b) => {
+                if (typeof a[column] === 'string') {
+                    return a[column].localeCompare(b[column]);
+                }
+                return b[column] - a[column];
+            });
+            updateTable();
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer.dropEffect = 'copy';
+        }
+
+        var dropZone = document.getElementById('drop_zone');
+        dropZone.addEventListener('dragover', handleDragOver, false);
+        dropZone.addEventListener('drop', handleDrop, false);
+
+        console.log('Script loaded and event listeners attached');
+    </script>
+</body>
+</html>

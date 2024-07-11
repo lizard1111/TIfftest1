@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Left-Right CSV Processor with Colors and Official Volumes</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        #drop_zone { border: 2px dashed #ccc; border-radius: 20px; width: 480px; margin: 20px auto; padding: 20px; text-align: center; }
+        #result { margin-top: 20px; padding: 20px; border: 1px solid #ddd; overflow-x: auto; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div id="drop_zone">
+        <p>Drag and drop CSV file here</p>
+    </div>
+    <div id="file_name" style="text-align: center; font-weight: bold;"></div>
+    <div id="result"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <script>
+        let globalData = [];
+        let officialVolumes = [];
+        let columns = ['name', 'acronym', 'count_left', 'count_right', 'count_sum', 'volume_left', 'volume_right', 'volume_sum', 'density_left', 'density_right', 'average_density', 'official_volume_left', 'official_volume_right', 'new_density_left', 'new_density_right'];
+        let colorMap = {};
+
+        // Load the color data when the page loads
+        window.addEventListener('load', function() {
+            fetch('query.csv')
+                .then(response => response.text())
+                .then(data => {
+                    Papa.parse(data, {
+                        header: true,
+                        complete: function(results) {
+                            processColorData(results.data);
+                        }
+                    });
+                })
+                .catch(error => console.error('Error loading color data:', error));
+
+            fetch('official_volumes.csv')
+                .then(response => response.text())
+                .then(data => {
+                    Papa.parse(data, {
+                        header: true,
+                        complete: function(results) {
+                            officialVolumes = results.data;
+                        }
+                    });
+                })
+                .catch(error => console.error('Error loading official volumes:', error));
+        });
+
+        function handleDrop(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('File dropped');
+
+            var file = e.dataTransfer.files[0];
+            if (!file) {
+                console.error('No file detected in drop event');
+                return;
+            }
+
+            document.getElementById('file_name').textContent = `Displaying: ${file.name}`;
+
+            console.log('Parsing file:', file.name);
+            Papa.parse(file, {
+                complete: function(results) {
+                    console.log('Parse complete', results);
+                    if (results.errors.length > 0) {
+                        console.error('Parse errors:', results.errors);
+                    }
+                    processData(results.data);
+                },
+                header: true,
+                error: function(error) {
+                    console.error('Parse error:', error);
+                }
+            });
+        }
+
+        function processColorData(data) {
+            data.forEach(row => {
+                colorMap[row.acronym] = row.color_hex_triplet;
+            });
+            console.log('Color map created', colorMap);
+        }
+
+        function getOfficialVolume(acronym, side) {
+            let volumeRow = officialVolumes.find(row => row.acronym === acronym && row.side === side);
+            return volumeRow ? parseFloat(volumeRow.volume) : 0;
+        }
+
+        function processData(data) {
+            console.log('Processing data', data.length, 'rows');
+            console.log('CSV columns:', Object.keys(data[0]));  // Log columns to understand structure
+
+            let leftData = data.filter(row => row.acronym && row.acronym.endsWith('-L') && row.name && row.name.toLowerCase().startsWith('left '));
+            let rightData = data.filter(row => row.acronym && row.acronym.endsWith('-R') && row.name && row.name.toLowerCase().startsWith('right '));
+
+            console.log('Left data:', leftData.length, 'rows');
+            console.log('Right data:', rightData.length, 'rows');
+
+            globalData = leftData.map(leftRow => {
+                let rightRow = rightData.find(r => r.acronym.slice(0, -2) === leftRow.acronym.slice(0, -2));
+                if (!rightRow) return null;
+
+                let leftCount = parseFloat(leftRow['cell count'] || leftRow['count'] || leftRow['COUNT']) || 0;
+                let rightCount = parseFloat(rightRow['cell count'] || rightRow['count'] || rightRow['COUNT']) || 0;
+                let leftVolume = parseFloat(leftRow['area (mm^3)'] || leftRow['volume (mm^3)'] || leftRow['VOLUME']) || 0;
+                let rightVolume = parseFloat(rightRow['area (mm^3)'] || rightRow['volume (mm^3)'] || rightRow['VOLUME']) || 0;
+                let leftDensity = parseFloat(leftRow['density (cells/mm^3)'] || leftRow['density (cells/mm³)'] || leftRow['DENSITY']) || 0;
+                let rightDensity = parseFloat(rightRow['density (cells/mm^3)'] || rightRow['density (cells/mm³)'] || rightRow['DENSITY']) || 0;
+
+                let officialVolumeLeft = getOfficialVolume(leftRow.acronym.slice(0, -2), 'L');
+                let officialVolumeRight = getOfficialVolume(rightRow.acronym.slice(0, -2), 'R');
+                let newDensityLeft = officialVolumeLeft > 0 ? leftCount / officialVolumeLeft : 0;
+                let newDensityRight = officialVolumeRight > 0 ? rightCount / officialVolumeRight : 0;
+
+                return {
+                    name: leftRow.name.replace(/^left /i, ''),
+                    acronym: leftRow.acronym.slice(0, -2),
+                    count_left: leftCount,
+                    count_right: rightCount,
+                    count_sum: leftCount + rightCount,
+                    volume_left: leftVolume,
+                    volume_right: rightVolume,
+                    volume_sum: leftVolume + rightVolume,
+                    density_left: leftDensity,
+                    density_right: rightDensity,
+                    average_density: (leftDensity + rightDensity) / 2,
+                    official_volume_left: officialVolumeLeft,
+                    official_volume_right: officialVolumeRight,
+                    new_density_left: newDensityLeft,
+                    new_density_right: newDensityRight
+                };
+            }).filter(row => row !== null);
+
+            console.log('Processed data:', globalData.length, 'rows');
+            console.log('Sample processed row:', globalData[0]);
+            updateTable();
+        }
+
+        function updateTable() {
+            let table = '<table><thead><tr>';
+            columns.forEach(col => {
+                table += `<th onclick="sortTable('${col}')">${col}</th>`;
+            });
+            table += '</tr></thead><tbody>';
+
+            globalData.forEach(row => {
+                table += '<tr>';
+                columns.forEach(col => {
+                    let value = row[col];
+                    if (col.includes('count')) {
+                        value = Math.round(value).toLocaleString();
+                    } else if (col.includes('volume')) {
+                        value = value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 5 });
+                    } else if (typeof value === 'number') {
+                        value = value.toFixed(2);
+                    }
+                    if (col === 'name' || col === 'acronym') {
+                        let color = colorMap[row.acronym] || 'FFFFFF';
+                        let textColor = getContrastColor(color);
+                        table += `<td style="background-color: #${color}; color: ${textColor};">${value}</td>`;
+                    } else {
+                        table += `<td>${value}</td>`;
+                    }
+                });
+                table += '</tr>';
+            });
+
+            table += '</tbody></table>';
+            document.getElementById('result').innerHTML = table;
+        }
+
+        function getContrastColor(hexcolor) {
+            if (!hexcolor) return '#000000';
+            var r = parseInt(hexcolor.substr(0,2),16);
+            var g = parseInt(hexcolor.substr(2,2),16);
+            var b = parseInt(hexcolor.substr(4,2),16);
+            var yiq = ((r*299)+(g*587)+(b*114))/1000;
+            return (yiq >= 128) ? 'black' : 'white';
+        }
+
+        function sortTable(column) {
+            globalData.sort((a, b) => {
+                if (typeof a[column] === 'string') {
+                    return a[column].localeCompare(b[column]);
+                }
+                return b[column] - a[column];
+            });
+            updateTable();
+        }
+
+        function handleDragOver(e) {

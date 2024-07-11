@@ -1,0 +1,69 @@
+.App {
+    text-align: center;
+    font-family: Arial, sans-serif;
+    max-width: 100vw;
+    overflow-x: auto;
+  }
+  
+  #drop_zone {
+    border: 2px dashed #ccc;
+    border-radius: 20px;
+    width: 80%;
+    max-width: 480px;
+    font-family: sans-serif;
+    margin: 20px auto;
+    padding: 20px;
+  }
+  
+  #drop_zone:hover {
+    border-color: #00ff00;
+    background-color: rgba(0, 255, 0, 0.1);
+  }
+  
+  .error {
+    color: red;
+    padding: 10px;
+    margin: 10px 0;
+    border: 1px solid red;
+    background-color: #ffeeee;
+  }
+  
+  #result {
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 14px;
+  }
+  
+  th, td {
+    border: 1px solid #ddd;
+    padding: 8px;
+    text-align: left;
+    white-space: nowrap;
+  }
+  
+  th {
+    background-color: #f2f2f2;
+    cursor: pointer;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  
+  td {
+    transition: background-color 0.3s;
+  }
+  
+  @media (max-width: 600px) {
+    table {
+      font-size: 12px;
+    }
+  
+    th, td {
+      padding: 4px;
+    }
+  }

@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-CSV Count Sum Viewer (Optimized)</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+        }
+        #drop_zone {
+            border: 2px dashed #ccc;
+            border-radius: 20px;
+            width: 480px;
+            margin: 20px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            overflow-x: auto;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+            cursor: pointer;
+        }
+        th:hover {
+            background-color: #ddd;
+        }
+        #filters {
+            display: flex;
+            justify-content: space-around;
+            margin-bottom: 20px;
+        }
+        #depth_filters, #st_level_filters {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+            gap: 5px;
+        }
+        .filter-button {
+            padding: 3px 6px;
+            cursor: pointer;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            font-size: 0.8em;
+            background-color: #f8f8f8;
+            color: #333;
+            transition: all 0.3s ease;
+        }
+        .filter-button.active {
+            background-color: #4CAF50;
+            color: white;
+            border-color: #45a049;
+        }
+    </style>
+</head>
+<body>
+    <div id="drop_zone">
+        <p>Drag and drop CSV files here (with count_sum data)</p>
+    </div>
+    <div id="filters">
+        <div>
+            <h3>Depth Filters:</h3>
+            <div id="depth_filters"></div>
+        </div>
+        <div>
+            <h3>St Level Filters:</h3>
+            <div id="st_level_filters"></div>
+        </div>
+    </div>
+    <div id="result"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <script>
+        let globalData = [];
+        let columns = ['acronym', 'depth', 'st_level'];
+        let table, thead, tbody;
+        let depthFilters = new Set();
+        let stLevelFilters = new Set();
+        let queryData = {};
+
+        // Load query.csv when the page loads
+        window.addEventListener('load', function() {
+            fetch('query.csv')
+                .then(response => response.text())
+                .then(data => {
+                    Papa.parse(data, {
+                        header: true,
+                        complete: function(results) {
+                            processQueryData(results.data);
+                        }
+                    });
+                })
+                .catch(error => console.error('Error loading query.csv:', error));
+        });
+
+        function processQueryData(data) {
+            data.forEach(row => {
+                queryData[row.acronym] = {
+                    depth: row.depth,
+                    st_level: row.st_level,
+                    color_hex_triplet: row.color_hex_triplet
+                };
+                depthFilters.add(row.depth);
+                stLevelFilters.add(row.st_level);
+            });
+            updateFilters();
+        }
+
+        function handleDrop(e) {
+            e.stopPropagation();
+            e.preventDefault();
+
+            var files = e.dataTransfer.files;
+
+            for (let i = 0; i < files.length; i++) {
+                let file = files[i];
+                Papa.parse(file, {
+                    complete: function(results) {
+                        processData(results.data, file.name);
+                    },
+                    header: true
+                });
+            }
+        }
+
+        function processData(data, fileName) {
+            columns.push(fileName);
+
+            data.forEach(row => {
+                if (row.acronym && row.count_sum && queryData[row.acronym]) {
+                    let existingRow = globalData.find(item => item.acronym === row.acronym);
+                    if (existingRow) {
+                        existingRow[fileName] = parseFloat(row.count_sum);
+                    } else {
+                        let newRow = {
+                            acronym: row.acronym,
+                            depth: queryData[row.acronym].depth,
+                            st_level: queryData[row.acronym].st_level,
+                            color: queryData[row.acronym].color_hex_triplet,
+                            [fileName]: parseFloat(row.count_sum)
+                        };
+                        globalData.push(newRow);
+                    }
+                }
+            });
+
+            updateTable();
+        }
+
+        function updateFilters() {
+            updateFilterButtons('depth_filters', depthFilters);
+            updateFilterButtons('st_level_filters', stLevelFilters);
+        }
+
+        function updateFilterButtons(containerId, filterSet) {
+            const container = document.getElementById(containerId);
+            container.innerHTML = '';
+            filterSet.forEach(value => {
+                const button = document.createElement('button');
+                button.textContent = value;
+                button.classList.add('filter-button', 'active');
+                button.onclick = () => toggleFilter(button, containerId, value);
+                container.appendChild(button);
+            });
+        }
+
+        function toggleFilter(button, type, value) {
+            button.classList.toggle('active');
+            renderRows();
+        }
+
+        function updateTable() {
+            if (!table) {
+                table = document.createElement('table');
+                thead = document.createElement('thead');
+                tbody = document.createElement('tbody');
+                table.appendChild(thead);
+                table.appendChild(tbody);
+                document.getElementById('result').appendChild(table);
+            }
+
+            // Update header
+            thead.innerHTML = '';
+            let headerRow = document.createElement('tr');
+            columns.forEach((col, index) => {
+                let th = document.createElement('th');
+                th.textContent = col;
+                th.onclick = () => sortTable(index);
+                headerRow.appendChild(th);
+            });
+            thead.appendChild(headerRow);
+
+            // Update body
+            renderRows();
+        }
+
+        function renderRows() {
+            let fragment = document.createDocumentFragment();
+            globalData.forEach(row => {
+                if (shouldShowRow(row)) {
+                    let tr = document.createElement('tr');
+                    columns.forEach(col => {
+                        let td = document.createElement('td');
+                        if (col === 'acronym') {
+                            td.textContent = row[col];
+                            td.style.backgroundColor = `#${row.color}`;
+                            td.style.color = getContrastColor(row.color);
+                        } else if (col === 'depth' || col === 'st_level') {
+                            td.textContent = row[col];
+                        } else {
+                            let value = row[col];
+                            if (value !== undefined) {
+                                td.textContent = Math.round(value).toLocaleString();
+                                td.style.color = getColor(value);
+                            }
+                        }
+                        tr.appendChild(td);
+                    });
+                    fragment.appendChild(tr);
+                }
+            });
+            tbody.innerHTML = '';
+            tbody.appendChild(fragment);
+        }
+
+        function shouldShowRow(row) {
+            const activeDepthFilters = Array.from(document.querySelectorAll('#depth_filters button.active')).map(b => b.textContent);
+            const activeStLevelFilters = Array.from(document.querySelectorAll('#st_level_filters button.active')).map(b => b.textContent);
+            return activeDepthFilters.includes(row.depth) && activeStLevelFilters.includes(row.st_level);
+        }
+
+        function getColor(value) {
+            let min = 0, max = 1000000; // Adjust based on your count_sum data range
+            let ratio = Math.min(Math.max((value - min) / (max - min), 0), 1);
+
+            if (ratio < 0.5) {
+                // Green to Yellow
+                let hue = (120 - (ratio * 2 * 60)).toString(10);
+                return `hsl(${hue},100%,50%)`;
+            } else {
+                // Yellow to Red
+                let hue = (60 - ((ratio - 0.5) * 2 * 60)).toString(10);
+                return `hsl(${hue},100%,50%)`;
+            }
+        }
+
+        function getContrastColor(hexcolor) {
+            if (!hexcolor) return '#000000';
+            var r = parseInt(hexcolor.substr(0,2),16);
+            var g = parseInt(hexcolor.substr(2,2),16);
+            var b = parseInt(hexcolor.substr(4,2),16);
+            var yiq = ((r*299)+(g*587)+(b*114))/1000;
+            return (yiq >= 128) ? 'black' : 'white';
+        }
+
+        function sortTable(columnIndex) {
+            let columnName = columns[columnIndex];
+            globalData.sort((a, b) => {
+                let aValue = a[columnName];
+                let bValue = b[columnName];
+                if (typeof aValue === 'string' && typeof bValue === 'string') {
+                    return aValue.localeCompare(bValue);
+                } else {
+                    return (bValue || 0) - (aValue || 0);
+                }
+            });
+            renderRows();
+        }
+
+        function handleDragOver(e) {
+            e.stopPropagation();
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+        }
+
+        var dropZone = document.getElementById('drop_zone');
+        dropZone.addEventListener('dragover', handleDragOver, false);
+        dropZone.addEventListener('drop', handleDrop, false);
+    </script>
+</body>
+</html>

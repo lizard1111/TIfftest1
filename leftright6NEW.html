@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brain Region Density Comparison Viewer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            overflow-x: hidden;
+        }
+        #drop_zone {
+            border: 2px dashed #ccc;
+            border-radius: 20px;
+            width: 480px;
+            margin: 20px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            overflow-x: auto;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            table-layout: fixed;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        th {
+            background-color: #f2f2f2;
+            cursor: pointer;
+        }
+        th:hover {
+            background-color: #ddd;
+        }
+        .resizable-table {
+            overflow-x: auto;
+            max-width: 100%;
+            width: 100%;
+        }
+        #filters {
+            display: flex;
+            justify-content: space-around;
+            margin-bottom: 20px;
+        }
+        #depth_filters, #st_level_filters {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+        }
+        .filter-button {
+            padding: 3px 6px;
+            cursor: pointer;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            font-size: 0.8em;
+            background-color: #f8f8f8;
+            color: #333;
+            transition: all 0.3s ease;
+        }
+        .filter-button.active {
+            background-color: #4CAF50;
+            color: white;
+            border-color: #45a049;
+        }
+        #legend {
+            display: flex;
+            justify-content: space-between;
+            margin: 20px 0;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 5px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+        }
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="drop_zone">
+        <p>Drag and drop CSV files here (with average_density data)</p>
+    </div>
+    <div id="filters">
+        <div>
+            <h3>Depth Filters:</h3>
+            <div id="depth_filters"></div>
+        </div>
+        <div>
+            <h3>St Level Filters:</h3>
+            <div id="st_level_filters"></div>
+        </div>
+    </div>
+    <div id="legend"></div>
+    <div id="result"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <script>
+        let globalData = [];
+        let columns = ['acronym', 'depth', 'st_level'];
+        let table, thead, tbody;
+        let depthFilters = new Set();
+        let stLevelFilters = new Set();
+        let queryData = {};
+        let rootDensities = {};
+
+        window.addEventListener('load', function() {
+            fetch('query.csv')
+                .then(response => response.text())
+                .then(data => {
+                    Papa.parse(data, {
+                        header: true,
+                        complete: function(results) {
+                            processQueryData(results.data);
+                        }
+                    });
+                })
+                .catch(error => console.error('Error loading query.csv:', error));
+        });
+
+        function processQueryData(data) {
+            data.forEach(row => {
+                queryData[row.acronym] = {
+                    depth: row.depth,
+                    st_level: row.st_level,
+                    color_hex_triplet: row.color_hex_triplet
+                };
+                depthFilters.add(row.depth);
+                stLevelFilters.add(row.st_level);
+            });
+            updateFilters();
+            updateLegend();
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            var files = e.dataTransfer.files;
+            Promise.all(Array.from(files).map(file => 
+                new Promise((resolve) => {
+                    Papa.parse(file, {
+                        complete: function(results) {
+                            processData(results.data, file.name);
+                            resolve();
+                        },
+                        header: true
+                    });
+                })
+            )).then(() => {
+                updateTable();
+            });
+        }
+
+        function processData(data, fileName) {
+            if (!columns.includes(fileName)) columns.push(fileName);
+
+            let rootDensity = data.find(row => row.acronym === 'root')?.average_density;
+            if (rootDensity) {
+                rootDensities[fileName] = parseFloat(rootDensity);
+            }
+
+            data.forEach(row => {
+                if (row.acronym && row.average_density && queryData[row.acronym]) {
+                    let existingRow = globalData.find(item => item.acronym === row.acronym);
+                    let relativeDensity = parseFloat(row.average_density) / rootDensities[fileName];
+                    if (existingRow) {
+                        existingRow[fileName] = relativeDensity;
+                    } else {
+                        let newRow = {
+                            acronym: row.acronym,
+                            depth: queryData[row.acronym].depth,
+                            st_level: queryData[row.acronym].st_level,
+                            color: queryData[row.acronym].color_hex_triplet,
+                            [fileName]: relativeDensity
+                        };
+                        globalData.push(newRow);
+                    }
+                }
+            });
+        }
+
+        function updateFilters() {
+            updateFilterButtons('depth_filters', depthFilters);
+            updateFilterButtons('st_level_filters', stLevelFilters);
+        }
+
+        function updateFilterButtons(containerId, filterSet) {
+            const container = document.getElementById(containerId);
+            container.innerHTML = '';
+            filterSet.forEach(value => {
+                const button = document.createElement('button');
+                button.textContent = value;
+                button.classList.add('filter-button', 'active');
+                button.onclick = () => toggleFilter(button, containerId, value);
+                container.appendChild(button);
+            });
+        }
+
+        function toggleFilter(button, type, value) {
+            button.classList.toggle('active');
+            renderRows();
+        }
+
+        function updateTable() {
+            if (!table) {
+                table = document.createElement('table');
+                thead = document.createElement('thead');
+                tbody = document.createElement('tbody');
+                table.appendChild(thead);
+                table.appendChild(tbody);
+                
+                let resizableContainer = document.createElement('div');
+                resizableContainer.className = 'resizable-table';
+                resizableContainer.appendChild(table);
+                document.getElementById('result').appendChild(resizableContainer);
+            }
+
+            thead.innerHTML = '';
+            let headerRow = document.createElement('tr');
+            columns.forEach((col, index) => {
+                let th = document.createElement('th');
+                th.textContent = col;
+                th.onclick = () => sortTable(index);
+                if (col === 'depth' || col === 'st_level') {
+                    th.style.width = '80px';
+                } else if (col === 'acronym') {
+                    th.style.width = '100px';
+                }
+                headerRow.appendChild(th);
+            });
+            thead.appendChild(headerRow);
+
+            renderRows();
+        }
+
+        function renderRows() {
+            let fragment = document.createDocumentFragment();
+            globalData.forEach(row => {
+                if (shouldShowRow(row)) {
+                    let tr = document.createElement('tr');
+                    columns.forEach(col => {
+                        let td = document.createElement('td');
+                        if (col === 'acronym') {
+                            td.textContent = row[col];
+                            td.style.backgroundColor = `#${row.color}`;
+                            td.style.color = 'black';
+                        } else if (col === 'depth' || col === 'st_level') {
+                            td.textContent = row[col];
+                        } else {
+                            let value = row[col];
+                            if (value !== undefined) {
+                                td.textContent = value.toFixed(2) + 'x';
+                                td.style.backgroundColor = getColor(value);
+                                td.style.color = getContrastColor(getColor(value));
+                            }
+                        }
+                        td.title = td.textContent;
+                        tr.appendChild(td);
+                    });
+                    fragment.appendChild(tr);
+                }
+            });
+            tbody.innerHTML = '';
+            tbody.appendChild(fragment);
+        }
+
+        function shouldShowRow(row) {
+            const activeDepthFilters = Array.from(document.querySelectorAll('#depth_filters button.active')).map(b => b.textContent);
+            const activeStLevelFilters = Array.from(document.querySelectorAll('#st_level_filters button.active')).map(b => b.textContent);
+            return activeDepthFilters.includes(row.depth) && activeStLevelFilters.includes(row.st_level);
+        }
+
+        function getColor(value) {
+            // Blue for lower than average, white for average, red for higher than average
+            if (value < 1) {
+                // Blue to White (corrected)
+                let intensity = Math.round(255 * value);
+                return `rgb(${intensity}, ${intensity}, 255)`;
+            } else {
+                // White to Red (unchanged)
+                let intensity = Math.round(255 * (2 - Math.min(value, 2)));
+                return `rgb(255, ${intensity}, ${intensity})`;
+            }
+        }
+
+        function getContrastColor(rgbColor) {
+            let [r, g, b] = rgbColor.match(/\d+/g).map(Number);
+            let yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
+            return (yiq >= 128) ? 'black' : 'white';
+        }
+
+        function updateLegend() {
+            const legend = document.getElementById('legend');
+            legend.innerHTML = '';
+            
+            const steps = 9;
+            for (let i = 0; i < steps; i++) {
+                const value = 0.5 + (i * 1.5 / (steps - 1));  // 0.5x to 2x range
+                const color = getColor(value);
+                
+                const item = document.createElement('div');
+                item.className = 'legend-item';
+                
+                const colorBox = document.createElement('div');
+                colorBox.className = 'legend-color';
+                colorBox.style.backgroundColor = color;
+                
+                const label = document.createElement('span');
+                label.textContent = value.toFixed(2) + 'x';
+                
+                item.appendChild(colorBox);
+                item.appendChild(label);
+                legend.appendChild(item);
+            }
+        }
+
+        function sortTable(columnIndex) {
+            let columnName = columns[columnIndex];
+            globalData.sort((a, b) => {
+                let aValue = a[columnName];
+                let bValue = b[columnName];
+                if (typeof aValue === 'string' && typeof bValue === 'string') {
+                    return aValue.localeCompare(bValue);
+                } else {
+                    return (bValue || 0) - (aValue || 0);
+                }
+            });
+            renderRows();
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+        }
+
+        var dropZone = document.getElementById('drop_zone');
+        dropZone.addEventListener('dragover', handleDragOver, false);
+        dropZone.addEventListener('drop', handleDrop, false);
+    </script>
+</body>
+</html>

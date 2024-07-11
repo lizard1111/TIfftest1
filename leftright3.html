@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Left-Right CSV Processor with Colors and Filters</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        #drop_zone { border: 2px dashed #ccc; border-radius: 20px; width: 480px; margin: 20px auto; padding: 20px; text-align: center; }
+        #result { margin-top: 20px; padding: 20px; border: 1px solid #ddd; overflow-x: auto; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; cursor: pointer; }
+        #filters { margin-bottom: 20px; display: flex; justify-content: space-between; }
+        .filter-group { width: 45%; }
+        .filter-option { margin-bottom: 5px; }
+        #download-btn { margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div id="drop_zone">
+        <p>Drag and drop CSV file here</p>
+    </div>
+    <div id="filters">
+        <div class="filter-group">
+            <h3>Depth Filters:</h3>
+            <div id="depth-filters"></div>
+        </div>
+        <div class="filter-group">
+            <h3>St Level Filters:</h3>
+            <div id="st-level-filters"></div>
+        </div>
+    </div>
+    <div id="result"></div>
+    <button id="download-btn" onclick="downloadCSV()">Download Reformatted CSV</button>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <script>
+        let globalData = [];
+        let columns = ['name', 'acronym', 'count_left', 'count_right', 'count_sum', 'volume_left', 'volume_right', 'volume_sum', 'density_left', 'density_right', 'average_density'];
+        let colorMap = {};
+        let depthFilters = new Set();
+        let stLevelFilters = new Set();
+        let activeDepthFilters = new Set();
+        let activeStLevelFilters = new Set();
+
+        // Load the color data when the page loads
+        window.addEventListener('load', function() {
+            fetch('query.csv')
+                .then(response => response.text())
+                .then(data => {
+                    Papa.parse(data, {
+                        header: true,
+                        complete: function(results) {
+                            processColorData(results.data);
+                        }
+                    });
+                })
+                .catch(error => console.error('Error loading color data:', error));
+        });
+
+        function handleDrop(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('File dropped');
+
+            var file = e.dataTransfer.files[0];
+            if (!file) {
+                console.error('No file detected in drop event');
+                return;
+            }
+
+            console.log('Parsing file:', file.name);
+            Papa.parse(file, {
+                complete: function(results) {
+                    console.log('Parse complete', results);
+                    if (results.errors.length > 0) {
+                        console.error('Parse errors:', results.errors);
+                    }
+                    processData(results.data);
+                },
+                header: true,
+                error: function(error) {
+                    console.error('Parse error:', error);
+                }
+            });
+        }
+
+        function processColorData(data) {
+            data.forEach(row => {
+                colorMap[row.acronym] = row.color_hex_triplet;
+                if (row.depth) depthFilters.add(row.depth);
+                if (row.st_level) stLevelFilters.add(row.st_level);
+            });
+            console.log('Color map created', colorMap);
+            updateFilters();
+        }
+
+        function updateFilters() {
+            updateFilterCheckboxes('depth-filters', depthFilters, activeDepthFilters);
+            updateFilterCheckboxes('st-level-filters', stLevelFilters, activeStLevelFilters);
+        }
+
+        function updateFilterCheckboxes(containerId, filterSet, activeSet) {
+            const container = document.getElementById(containerId);
+            container.innerHTML = '';
+            Array.from(filterSet).sort((a, b) => a - b).forEach(value => {
+                const div = document.createElement('div');
+                div.className = 'filter-option';
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.id = `${containerId}-${value}`;
+                checkbox.value = value;
+                checkbox.checked = activeSet.has(value.toString());
+                checkbox.onchange = () => toggleFilter(checkbox, activeSet, value.toString());
+                const label = document.createElement('label');
+                label.htmlFor = checkbox.id;
+                label.textContent = value;
+                div.appendChild(checkbox);
+                div.appendChild(label);
+                container.appendChild(div);
+            });
+        }
+
+        function toggleFilter(checkbox, activeSet, value) {
+            if (checkbox.checked) {
+                activeSet.add(value);
+            } else {
+                activeSet.delete(value);
+            }
+            updateTable();
+        }
+
+        function processData(data) {
+            console.log('Processing data', data.length, 'rows');
+            console.log('Sample row:', data[0]);
+
+            let leftData = data.filter(row => row.acronym && row.acronym.endsWith('-L') && row.name && row.name.toLowerCase().startsWith('left '));
+            let rightData = data.filter(row => row.acronym && row.acronym.endsWith('-R') && row.name && row.name.toLowerCase().startsWith('right '));
+
+            console.log('Left data:', leftData.length, 'rows');
+            console.log('Right data:', rightData.length, 'rows');
+
+            globalData = leftData.map(leftRow => {
+                let rightRow = rightData.find(r => r.acronym.slice(0, -2) === leftRow.acronym.slice(0, -2));
+                if (!rightRow) return null;
+
+                let countSum = (parseFloat(leftRow['cell count']) || 0) + (parseFloat(rightRow['cell count']) || 0);
+                let averageDensity = ((parseFloat(leftRow['density (cells/mm^3)']) || 0) + (parseFloat(rightRow['density (cells/mm^3)']) || 0)) / 2;
+
+                return {
+                    name: leftRow.name.replace(/^left /i, ''),
+                    acronym: leftRow.acronym.slice(0, -2),
+                    count_left: parseFloat(leftRow['cell count']) || 0,
+                    count_right: parseFloat(rightRow['cell count']) || 0,
+                    count_sum: countSum,
+                    volume_left: parseFloat(leftRow['area (mm^3)']) || 0,
+                    volume_right: parseFloat(rightRow['area (mm^3)']) || 0,
+                    volume_sum: (parseFloat(leftRow['area (mm^3)']) || 0) + (parseFloat(rightRow['area (mm^3)']) || 0),
+                    density_left: parseFloat(leftRow['density (cells/mm^3)']) || 0,
+                    density_right: parseFloat(rightRow['density (cells/mm^3)']) || 0,
+                    average_density: averageDensity,
+                    depth: leftRow.depth,
+                    st_level: leftRow.st_level
+                };
+            }).filter(row => row !== null);
+
+            console.log('Processed data:', globalData.length, 'rows');
+            console.log('Sample processed row:', globalData[0]);
+            updateTable();
+        }
+
+        function updateTable() {
+            let filteredData = globalData.filter(row =>
+                (activeDepthFilters.size === 0 || activeDepthFilters.has(row.depth.toString())) &&
+                (activeStLevelFilters.size === 0 || activeStLevelFilters.has(row.st_level.toString()))
+            );
+
+            let table = '<table><thead><tr>';
+            columns.forEach(col => {
+                table += `<th onclick="sortTable('${col}')">${col}</th>`;
+            });
+            table += '</tr></thead><tbody>';
+
+            let columnMinMax = {};
+            columns.forEach(col => {
+                if (typeof filteredData[0][col] === 'number') {
+                    columnMinMax[col] = {
+                        min: Math.min(...filteredData.map(row => row[col])),
+                        max: Math.max(...filteredData.map(row => row[col]))
+                    };
+                }
+            });
+
+            filteredData.forEach(row => {
+                table += '<tr>';
+                columns.forEach(col => {
+                    let value = row[col];
+                    if (typeof value === 'number') {
+                        value = value.toFixed(2);
+                    }
+                    if (col === 'name' || col === 'acronym') {
+                        let color = colorMap[row.acronym] || 'FFFFFF';
+                        let textColor = getContrastColor(color);
+                        table += `<td style="background-color: #${color}; color: ${textColor};">${value}</td>`;
+                    } else if (typeof row[col] === 'number') {
+                        let color = getHeatMapColor(row[col], columnMinMax[col].min, columnMinMax[col].max);
+                        table += `<td style="background-color: ${color};">${value}</td>`;
+                    } else {
+                        table += `<td>${value}</td>`;
+                    }
+                });
+                table += '</tr>';
+            });
+
+            table += '</tbody></table>';
+            document.getElementById('result').innerHTML = table;
+        }
+
+        function getContrastColor(hexcolor) {
+            if (!hexcolor) return '#000000';
+            var r = parseInt(hexcolor.substr(0,2),16);
+            var g = parseInt(hexcolor.substr(2,2),16);
+            var b = parseInt(hexcolor.substr(4,2),16);
+            var yiq = ((r*299)+(g*587)+(b*114))/1000;
+            return (yiq >= 128) ? 'black' : 'white';
+        }
+
+        function getHeatMapColor(value, min, max) {
+            let ratio = (value - min) / (max - min);
+            let r = Math.floor(255 * Math.min(1, 2 * ratio));
+            let b = Math.floor(255 * (1 - Math.min(1, 2 * ratio)));
+            return `rgb(${r}, 0, ${b})`;
+        }
+
+        function sortTable(column) {
+            globalData.sort((a, b) => {
+                if (typeof a[column] === 'string') {
+                    return a[column].localeCompare(b[column]);
+                }
+                return b[column] - a[column];
+            });
+            updateTable();
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer.dropEffect = 'copy';
+        }
+
+        function downloadCSV() {
+            let csv = Papa.unparse(globalData);
+            let blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            let link = document.createElement("a");
+            if (link.download !== undefined) {
+                let url = URL.createObjectURL(blob);
+                link.setAttribute("href", url);
+                link.setAttribute("download", "reformatted_data.csv");
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            }
+        }
+
+        var dropZone = document.getElementById('drop_zone');
+        dropZone.addEventListener('dragover', handleDragOver, false);
+        dropZone.addEventListener('drop', handleDrop, false);
+
+        console.log('Script loaded and event listeners attached');
+    </script>
+</body>
+</html>
